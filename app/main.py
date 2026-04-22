@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-import asyncio
 import aiohttp
 import json
 import logging
@@ -47,11 +46,15 @@ async def get_ai_summary(positions_data, balance_data):
 cover overall health, biggest mover, one thing worth watching.
 no fluff, numbers where useful, be direct.
 
+the portfolio is in GBP, unrealised P&L is in GBP, and percentages are relative to invested amount.
+
 respond in plain text only. no markdown. no asterisks. no bold. no bullet points.
 do not repeat content. 2-3 sentences total, no sections or headers.
 
 positions: {json.dumps(positions_data)}
 balance: {json.dumps(balance_data)}"""
+
+        logger.debug(f"AI summary prompt: {prompt}")
 
         payload = {
             "model": "llama3.1:8b",
@@ -63,7 +66,7 @@ balance: {json.dumps(balance_data)}"""
             async with session.post(
                 "http://192.168.1.211:11434/api/generate",
                 json=payload,
-                timeout=30
+                timeout=120
             ) as response:
                 if response.status == 200:
                     result = await response.json()

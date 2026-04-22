@@ -2,12 +2,14 @@ services:
   portfolio-ai:
     build: .
     container_name: portfolio-ai
+    extra_hosts:
+      - "inference.picxi.uk:192.168.1.211"
     ports:
       - "8765:8765"
     volumes:
       - ./trading212_config.json:/app/trading212_config.json:ro
     networks:
-      - npm
+      - npm_network
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
@@ -19,5 +21,6 @@ services:
       start_period: 40s
 
 networks:
-  npm:
+  npm_network:
     external: true
+    name: nginx-proxy-manager_default
