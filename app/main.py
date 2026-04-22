@@ -47,6 +47,9 @@ async def get_ai_summary(positions_data, balance_data):
 cover overall health, biggest mover, one thing worth watching.
 no fluff, numbers where useful, be direct.
 
+respond in plain text only. no markdown. no asterisks. no bold. no bullet points.
+do not repeat content. 2-3 sentences total, no sections or headers.
+
 positions: {json.dumps(positions_data)}
 balance: {json.dumps(balance_data)}"""
 
