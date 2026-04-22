@@ -42,7 +42,7 @@ async def check_inference_service():
 def analyse_positions(positions_data, balance_data):
     """pre-compute key portfolio facts so the model doesn't have to"""
     
-    positions = sorted(positions_data, key=lambda p: p.get("ppl", 0))
+    positions = sorted(positions_data, key=lambda p: p.get("ppl_gbp", 0))
     
     biggest_loser = positions[0] if positions else None
     biggest_winner = positions[-1] if positions else None
@@ -67,11 +67,11 @@ def analyse_positions(positions_data, balance_data):
         "position_count": len(positions),
         "biggest_winner": {
             "ticker": clean_ticker(biggest_winner.get("ticker", "")),
-            "ppl_gbp": biggest_winner.get("ppl")
+            "ppl_gbp": biggest_winner.get("ppl_gbp")
         } if biggest_winner else None,
         "biggest_loser": {
             "ticker": clean_ticker(biggest_loser.get("ticker", "")),
-            "ppl_gbp": biggest_loser.get("ppl")
+            "ppl_gbp": biggest_loser.get("ppl_gbp")
         } if biggest_loser else None,
     }
 
