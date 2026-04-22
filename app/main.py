@@ -34,7 +34,7 @@ async def check_inference_service():
     """Check if inference service is available"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("http://inference.picxi.uk/api/tags", timeout=5) as response:
+            async with session.get("http://192.168.1.211:11434/api/tags", timeout=5) as response:
                 return response.status == 200
     except Exception as e:
         logger.warning(f"Inference service not reachable: {e}")
@@ -58,7 +58,7 @@ balance: {json.dumps(balance_data)}"""
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "http://inference.picxi.uk/api/generate",
+                "http://192.168.1.211:11434/api/generate",
                 json=payload,
                 timeout=30
             ) as response:
@@ -84,13 +84,13 @@ async def get_portfolio_summary():
         portfolio_data = client.get_all_data()
         
         # Extract required fields
-        balance = portfolio_data.get("balance", {})
-        positions = portfolio_data.get("positions", [])
+        cash_data = portfolio_data.get("cash", {})
+        positions = portfolio_data.get("portfolio", [])
         
-        total = balance.get("total", 0.0)
-        invested = balance.get("invested", 0.0)
-        unrealised_pnl = balance.get("ppl", 0.0)
-        cash = balance.get("freeForStockInvestment", 0.0)
+        total = cash_data.get("total", 0.0)
+        invested = cash_data.get("invested", 0.0)
+        unrealised_pnl = cash_data.get("ppl", 0.0)
+        cash = cash_data.get("free", 0.0)
         
         # Calculate unrealised percentage
         unrealised_pct = (unrealised_pnl / invested * 100) if invested > 0 else 0.0
@@ -104,7 +104,7 @@ async def get_portfolio_summary():
         
         if inference_available:
             logger.info("Getting AI summary")
-            ai_summary = await get_ai_summary(positions, balance)
+            ai_summary = await get_ai_summary(positions, cash_data)
         
         response_data = {
             "total": round(total, 2),
