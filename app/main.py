@@ -39,20 +39,59 @@ async def check_inference_service():
         logger.warning(f"Inference service not reachable: {e}")
         return False
 
+def analyse_positions(positions_data, balance_data):
+    """pre-compute key portfolio facts so the model doesn't have to"""
+    
+    positions = sorted(positions_data, key=lambda p: p.get("ppl", 0))
+    
+    biggest_loser = positions[0] if positions else None
+    biggest_winner = positions[-1] if positions else None
+    
+    def clean_ticker(t):
+        for suffix in ["_US_EQ", "_UK_EQ", "l_EQ", "L_EQ", "_EQ"]:
+            t = t.replace(suffix, "")
+        return t
+    
+    total = balance_data.get("total", 0)
+    invested = balance_data.get("invested", 0)
+    pnl = balance_data.get("ppl", 0)
+    pct = (pnl / invested * 100) if invested > 0 else 0
+    cash = balance_data.get("free", 0)
+    
+    return {
+        "total_gbp": round(total, 2),
+        "invested_gbp": round(invested, 2),
+        "unrealised_pnl_gbp": round(pnl, 2),
+        "unrealised_pct": round(pct, 2),
+        "cash_gbp": round(cash, 2),
+        "position_count": len(positions),
+        "biggest_winner": {
+            "ticker": clean_ticker(biggest_winner.get("ticker", "")),
+            "ppl_gbp": biggest_winner.get("ppl")
+        } if biggest_winner else None,
+        "biggest_loser": {
+            "ticker": clean_ticker(biggest_loser.get("ticker", "")),
+            "ppl_gbp": biggest_loser.get("ppl")
+        } if biggest_loser else None,
+    }
+
 async def get_ai_summary(positions_data, balance_data):
     """Get AI summary from Ollama inference service"""
     try:
-        prompt = f"""you are a terse portfolio assistant. 2 sentences max.
-cover overall health, biggest mover, one thing worth watching.
-no fluff, numbers where useful, be direct.
+        facts = analyse_positions(positions_data, balance_data)
 
-the portfolio is in GBP, unrealised P&L is in GBP, and percentages are relative to invested amount.
+        prompt = f"""you are a terse portfolio assistant.
+respond in plain text only. no markdown. no asterisks. no sections.
+2-3 sentences. cover: overall health, biggest mover, one thing worth watching.
 
-respond in plain text only. no markdown. no asterisks. no bold. no bullet points.
-do not repeat content. 2-3 sentences total, no sections or headers.
-
-positions: {json.dumps(positions_data)}
-balance: {json.dumps(balance_data)}"""
+portfolio facts:
+- total value: £{facts['total_gbp']}
+- unrealised P&L: £{facts['unrealised_pnl_gbp']} ({facts['unrealised_pct']}%)
+- cash available: £{facts['cash_gbp']}
+- positions: {facts['position_count']}
+- biggest winner: {facts['biggest_winner']['ticker']} (+£{facts['biggest_winner']['ppl_gbp']})
+- biggest loser: {facts['biggest_loser']['ticker']} (£{facts['biggest_loser']['ppl_gbp']})
+"""
 
         logger.info(f"AI summary prompt: {prompt}")
 
@@ -108,9 +147,18 @@ async def get_portfolio_summary():
         inference_available = await check_inference_service()
         ai_summary = None
         
+        slim_positions = [
+    {
+        "ticker": p.get("ticker", "").replace("_US_EQ","").replace("_EQ","").replace("l_EQ","").replace("_EQ",""),
+        "ppl_gbp": p.get("ppl"),
+        "current_value_gbp": p.get("currentValue")
+    }
+    for p in positions
+]
+        
         if inference_available:
             logger.info("Getting AI summary")
-            ai_summary = await get_ai_summary(positions, cash_data)
+            ai_summary = await get_ai_summary(slim_positions, cash_data)
         
         response_data = {
             "total": round(total, 2),
