@@ -54,7 +54,7 @@ do not repeat content. 2-3 sentences total, no sections or headers.
 positions: {json.dumps(positions_data)}
 balance: {json.dumps(balance_data)}"""
 
-        logger.debug(f"AI summary prompt: {prompt}")
+        logger.info(f"AI summary prompt: {prompt}")
 
         payload = {
             "model": "llama3.1:8b",
