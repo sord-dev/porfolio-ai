@@ -1,0 +1,23 @@
+services:
+  portfolio-ai:
+    build: .
+    container_name: portfolio-ai
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./trading212_config.json:/app/trading212_config.json:ro
+    networks:
+      - npm
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  npm:
+    external: true
