@@ -93,8 +93,6 @@ portfolio facts:
 - biggest loser: {facts['biggest_loser']['ticker']} (£{facts['biggest_loser']['ppl_gbp']})
 """
 
-        logger.info(f"AI summary prompt: {prompt}")
-
         payload = {
             "model": "llama3.1:8b",
             "prompt": prompt,
