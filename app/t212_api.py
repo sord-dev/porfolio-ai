@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Any
 class CachedTrading212API:
     """Enhanced Trading212 API client with caching and rate limiting"""
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), 'trading212_config.json')
         
@@ -158,7 +158,7 @@ class CachedTrading212API:
                 status['reset_in_seconds'] = None
             return status
     
-    def make_request(self, endpoint: str, method: str = 'GET', data: Dict = None) -> Optional[Dict]:
+    def make_request(self, endpoint: str, method: str = 'GET', data: Optional[Dict] = None) -> Optional[Any]:
         """Make authenticated request to Trading212 API with caching and rate limiting"""
         cache_key = f"{method}:{endpoint}"
         
@@ -205,59 +205,83 @@ class CachedTrading212API:
     
     def get_balance(self) -> Dict:
         """Get account summary information including cash and investments"""
-        return self.make_request('/equity/account/summary')
+        result = self.make_request('/equity/account/summary')
+        return result if isinstance(result, dict) else {}
     
     def get_positions(self) -> Dict:
         """Get all current positions"""
-        return self.make_request('/equity/positions')
+        result = self.make_request('/equity/positions')
+        return result if isinstance(result, dict) else {}
     
     def get_cash(self) -> Dict:
         """Get cash account information"""
-        return self.make_request('/equity/account/cash')
+        result = self.make_request('/equity/account/cash')
+        return result if isinstance(result, dict) else {}
     
     def get_portfolio(self) -> List[Dict]:
         """Get portfolio positions"""
-        return self.make_request('/equity/portfolio')
+        result = self.make_request('/equity/portfolio')
+        if result is None:
+            return []
+        # Ensure we return a list even if API returns something else
+        return result if isinstance(result, list) else []
     
     def get_account_info(self) -> Dict:
         """Get account information"""
-        return self.make_request('/equity/account/info')
+        result = self.make_request('/equity/account/info')
+        return result if isinstance(result, dict) else {}
     
     def get_orders(self) -> List[Dict]:
         """Get pending orders"""
-        return self.make_request('/equity/orders')
+        result = self.make_request('/equity/orders')
+        if result is None:
+            return []
+        # Ensure we return a list even if API returns something else
+        return result if isinstance(result, list) else []
+    
+    def _markets_open(self) -> bool:  
+        now = datetime.now()
+        if now.weekday() >= 5:  # sat/sun
+            return False
+        return 8 <= now.hour < 21  # Approximate market hours (8am-9pm)
     
     def get_all_data(self) -> Dict:
         """Get all required data in one go and cache it"""
-        cached_data = self.load_cache()
-        if cached_data and 'data' in cached_data:
-            # Return cached data if available
-            all_data = {}
-            endpoints = ['/equity/account/cash', '/equity/portfolio', '/equity/account/info', '/equity/orders']
-            
-            # Check if we have all endpoints cached
-            cache_complete = all(f"GET:{endpoint}" in cached_data['data'] for endpoint in endpoints)
-            
-            if cache_complete:
-                all_data['cash'] = cached_data['data']['GET:/equity/account/cash']
-                all_data['portfolio'] = cached_data['data']['GET:/equity/portfolio']
-                all_data['info'] = cached_data['data']['GET:/equity/account/info']
-                all_data['orders'] = cached_data['data']['GET:/equity/orders']
-                return all_data
+        # Try to use cached data first if markets are closed
+        if not self._markets_open():
+            cached_data = self.load_cache()
+            if cached_data and 'data' in cached_data:
+                # Return cached data if available
+                all_data = {}
+                endpoints = ['/equity/account/cash', '/equity/portfolio', '/equity/account/info', '/equity/orders']
+                
+                # Check if we have all endpoints cached
+                cache_complete = all(f"GET:{endpoint}" in cached_data['data'] for endpoint in endpoints)
+                
+                if cache_complete:
+                    all_data['cash'] = cached_data['data']['GET:/equity/account/cash']
+                    all_data['portfolio'] = cached_data['data']['GET:/equity/portfolio']
+                    all_data['info'] = cached_data['data']['GET:/equity/account/info']
+                    all_data['orders'] = cached_data['data']['GET:/equity/orders']
+                    return all_data
         
-        # Fetch fresh data with rate limit handling
+        # Fetch fresh data with rate limit handling (either markets open or cache incomplete)
         all_data = {}
         
         # Add small delays between requests to avoid rate limiting
-        all_data['cash'] = self.make_request('/equity/account/cash')
+        cash_result = self.make_request('/equity/account/cash')
+        all_data['cash'] = cash_result if isinstance(cash_result, dict) else {}
         time.sleep(0.5)
         
-        all_data['portfolio'] = self.make_request('/equity/portfolio')
+        portfolio_result = self.make_request('/equity/portfolio')
+        all_data['portfolio'] = portfolio_result if isinstance(portfolio_result, list) else []
         time.sleep(0.5)
         
-        all_data['info'] = self.make_request('/equity/account/info')
+        info_result = self.make_request('/equity/account/info')
+        all_data['info'] = info_result if isinstance(info_result, dict) else {}
         time.sleep(0.5)
         
-        all_data['orders'] = self.make_request('/equity/orders')
+        orders_result = self.make_request('/equity/orders')
+        all_data['orders'] = orders_result if isinstance(orders_result, list) else []
         
         return all_data
