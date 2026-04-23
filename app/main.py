@@ -9,7 +9,7 @@ from typing import Optional
 from t212_api import CachedTrading212API
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Portfolio AI", description="Trading212 Portfolio with AI Analysis")
