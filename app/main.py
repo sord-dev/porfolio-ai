@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 import aiohttp
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -17,8 +19,25 @@ app = FastAPI(title="Portfolio AI", description="Trading212 Portfolio with AI An
 # Initialize T212 API client
 t212_client = None
 
+# --- request coalescing state ---
+_summary_lock = asyncio.Lock()
+_summary_in_flight: Optional[asyncio.Event] = None
+_summary_cached_result: Optional[dict] = None
+_summary_cache_ts: float = 0.0
+_SUMMARY_COALESCE_TTL: float = 30.0
+
+# --- inference service availability cache ---
+_inference_cache: Optional[bool] = None
+_inference_cache_ts: float = 0.0
+_INFERENCE_CACHE_TTL: float = 45.0
+
+# --- AI summary cache ---
+_ai_summary_cache: Optional[str] = None
+_ai_summary_cache_key: Optional[tuple] = None
+_ai_summary_cache_ts: float = 0.0
+_AI_SUMMARY_TTL: float = 300.0
+
 def get_t212_client():
-    """Initialize T212 client if not already done"""
     global t212_client
     if t212_client is None:
         try:
@@ -29,35 +48,41 @@ def get_t212_client():
             raise HTTPException(status_code=500, detail="Failed to initialize Trading212 client")
     return t212_client
 
-async def check_inference_service():
-    """Check if inference service is available"""
+async def check_inference_service() -> bool:
+    global _inference_cache, _inference_cache_ts
+    now = time.monotonic()
+    if _inference_cache is not None and (now - _inference_cache_ts) < _INFERENCE_CACHE_TTL:
+        return _inference_cache
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get("http://192.168.1.211:11434/api/tags", timeout=5) as response:
-                return response.status == 200
+                result = response.status == 200
     except Exception as e:
         logger.warning(f"Inference service not reachable: {e}")
-        return False
+        result = False
+    _inference_cache = result
+    _inference_cache_ts = now
+    return result
 
 def analyse_positions(positions_data, balance_data):
     """pre-compute key portfolio facts so the model doesn't have to"""
-    
+
     positions = sorted(positions_data, key=lambda p: p.get("ppl_gbp", 0))
-    
+
     biggest_loser = positions[0] if positions else None
     biggest_winner = positions[-1] if positions else None
-    
+
     def clean_ticker(t):
         for suffix in ["_US_EQ", "_UK_EQ", "l_EQ", "L_EQ", "_EQ"]:
             t = t.replace(suffix, "")
         return t
-    
+
     total = balance_data.get("total", 0)
     invested = balance_data.get("invested", 0)
     pnl = balance_data.get("ppl", 0)
     pct = (pnl / invested * 100) if invested > 0 else 0
     cash = balance_data.get("free", 0)
-    
+
     return {
         "total_gbp": round(total, 2),
         "invested_gbp": round(invested, 2),
@@ -76,7 +101,22 @@ def analyse_positions(positions_data, balance_data):
     }
 
 async def get_ai_summary(positions_data, balance_data):
-    """Get AI summary from Ollama inference service"""
+    global _ai_summary_cache, _ai_summary_cache_key, _ai_summary_cache_ts
+
+    cache_key = (
+        round(balance_data.get("total", 0), 2),
+        round(balance_data.get("ppl", 0), 2),
+        round(balance_data.get("free", 0), 2),
+    )
+    now = time.monotonic()
+    if (
+        _ai_summary_cache is not None
+        and _ai_summary_cache_key == cache_key
+        and (now - _ai_summary_cache_ts) < _AI_SUMMARY_TTL
+    ):
+        logger.info("Returning cached AI summary")
+        return _ai_summary_cache
+
     try:
         facts = analyse_positions(positions_data, balance_data)
 
@@ -107,7 +147,11 @@ portfolio facts:
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    return result.get("response", "").strip()
+                    text = result.get("response", "").strip()
+                    _ai_summary_cache = text
+                    _ai_summary_cache_key = cache_key
+                    _ai_summary_cache_ts = time.monotonic()
+                    return text
                 else:
                     logger.error(f"Inference API error: {response.status}")
                     return None
@@ -115,77 +159,99 @@ portfolio facts:
         logger.error(f"Error getting AI summary: {e}")
         return None
 
+async def _do_fetch_summary() -> dict:
+    client = get_t212_client()
+
+    logger.info("Fetching portfolio data from Trading212")
+    portfolio_data = client.get_all_data()
+
+    cash_data = portfolio_data.get("cash", {})
+    positions = portfolio_data.get("portfolio", [])
+
+    total = cash_data.get("total", 0.0)
+    invested = cash_data.get("invested", 0.0)
+    unrealised_pnl = cash_data.get("ppl", 0.0)
+    cash = cash_data.get("free", 0.0)
+
+    unrealised_pct = (unrealised_pnl / invested * 100) if invested > 0 else 0.0
+    position_count = len(positions)
+
+    inference_available = await check_inference_service()
+    ai_summary = None
+
+    slim_positions = [
+        {
+            "ticker": p.get("ticker", "").replace("_US_EQ","").replace("_EQ","").replace("l_EQ","").replace("_EQ",""),
+            "ppl_gbp": p.get("ppl"),
+            "current_value_gbp": p.get("currentValue")
+        }
+        for p in positions
+    ]
+
+    if inference_available:
+        logger.info("Getting AI summary")
+        ai_summary = await get_ai_summary(slim_positions, cash_data)
+
+    response_data = {
+        "total": round(total, 2),
+        "invested": round(invested, 2),
+        "unrealised_pnl": round(unrealised_pnl, 2),
+        "unrealised_pct": round(unrealised_pct, 2),
+        "cash": round(cash, 2),
+        "positions": position_count,
+        "ai_summary": ai_summary,
+        "inference_available": inference_available
+    }
+
+    logger.info(f"Portfolio summary generated successfully. Total: £{total:.2f}")
+    return response_data
+
 @app.get("/summary")
 async def get_portfolio_summary():
-    """Get portfolio summary with AI analysis"""
+    global _summary_in_flight, _summary_cached_result, _summary_cache_ts
+
+    async with _summary_lock:
+        now = time.monotonic()
+        if _summary_cached_result is not None and (now - _summary_cache_ts) < _SUMMARY_COALESCE_TTL:
+            logger.info("Returning coalesced /summary result (cached)")
+            return _summary_cached_result
+        if _summary_in_flight is not None:
+            event = _summary_in_flight
+        else:
+            event = None
+
+    if event is not None:
+        logger.info("Waiting for in-flight /summary fetch")
+        await event.wait()
+        return _summary_cached_result
+
+    my_event = asyncio.Event()
+    async with _summary_lock:
+        _summary_in_flight = my_event
+
+    result = None
     try:
-        # Get T212 client
-        client = get_t212_client()
-        
-        # Fetch portfolio data from T212 API
-        logger.info("Fetching portfolio data from Trading212")
-        portfolio_data = client.get_all_data()
-        
-        # Extract required fields
-        cash_data = portfolio_data.get("cash", {})
-        positions = portfolio_data.get("portfolio", [])
-        
-        total = cash_data.get("total", 0.0)
-        invested = cash_data.get("invested", 0.0)
-        unrealised_pnl = cash_data.get("ppl", 0.0)
-        cash = cash_data.get("free", 0.0)
-        
-        # Calculate unrealised percentage
-        unrealised_pct = (unrealised_pnl / invested * 100) if invested > 0 else 0.0
-        
-        # Count positions
-        position_count = len(positions)
-        
-        # Check if inference service is available
-        inference_available = await check_inference_service()
-        ai_summary = None
-        
-        slim_positions = [
-    {
-        "ticker": p.get("ticker", "").replace("_US_EQ","").replace("_EQ","").replace("l_EQ","").replace("_EQ",""),
-        "ppl_gbp": p.get("ppl"),
-        "current_value_gbp": p.get("currentValue")
-    }
-    for p in positions
-]
-        
-        if inference_available:
-            logger.info("Getting AI summary")
-            ai_summary = await get_ai_summary(slim_positions, cash_data)
-        
-        response_data = {
-            "total": round(total, 2),
-            "invested": round(invested, 2),
-            "unrealised_pnl": round(unrealised_pnl, 2),
-            "unrealised_pct": round(unrealised_pct, 2),
-            "cash": round(cash, 2),
-            "positions": position_count,
-            "ai_summary": ai_summary,
-            "inference_available": inference_available
-        }
-        
-        logger.info(f"Portfolio summary generated successfully. Total: £{total:.2f}")
-        return response_data
-        
+        result = await _do_fetch_summary()
     except Exception as e:
         logger.error(f"Error generating portfolio summary: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        async with _summary_lock:
+            _summary_in_flight = None
+            if result is not None:
+                _summary_cached_result = result
+                _summary_cache_ts = time.monotonic()
+        my_event.set()
+
+    return result
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     try:
-        # Test T212 client
         client = get_t212_client()
-        
-        # Test inference service
+
         inference_available = await check_inference_service()
-        
+
         return {
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),

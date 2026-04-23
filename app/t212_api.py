@@ -29,7 +29,12 @@ class CachedTrading212API:
         self.base_url = self.config.get('base_url', 'https://live.trading212.com/api/v0')
         self.headers = self._build_auth_headers()
         self.cache_duration = self.config.get('cache_duration', 300)  # 5 minutes
-        
+
+        # L1 in-memory cache (avoids disk reads when data is still fresh)
+        self._mem_cache: Dict = {}
+        self._mem_cache_ts: Optional[datetime] = None
+        self._cache_lock = threading.Lock()
+
         # Rate limiting state
         self._rate_limit_lock = threading.Lock()
         self._rate_limit_info: Dict[str, Optional[int]] = {
@@ -75,19 +80,27 @@ class CachedTrading212API:
     
     def load_cache(self) -> Dict:
         """Load cached data if it exists and is still valid"""
+        with self._cache_lock:
+            if self._mem_cache_ts is not None:
+                age = (datetime.now() - self._mem_cache_ts).total_seconds()
+                if age < self.cache_duration:
+                    return self._mem_cache
+
         if not os.path.exists(self.cache_file):
             return {}
-        
+
         try:
             with open(self.cache_file, 'rb') as f:
                 cache_data = pickle.load(f)
-            
-            # Check if cache is still valid
+
             if 'timestamp' in cache_data:
                 cache_age = datetime.now() - cache_data['timestamp']
                 if cache_age.total_seconds() < self.cache_duration:
+                    with self._cache_lock:
+                        self._mem_cache = cache_data
+                        self._mem_cache_ts = cache_data['timestamp']
                     return cache_data
-            
+
             return {}
         except (FileNotFoundError, pickle.PickleError, KeyError):
             return {}
@@ -98,12 +111,14 @@ class CachedTrading212API:
             'timestamp': datetime.now(),
             'data': data
         }
-        
+        with self._cache_lock:
+            self._mem_cache = cache_data
+            self._mem_cache_ts = cache_data['timestamp']
         try:
             with open(self.cache_file, 'wb') as f:
                 pickle.dump(cache_data, f)
         except Exception:
-            pass  # Fail silently if can't write cache
+            pass
     
     def _check_rate_limits(self):
         """Check if we should delay the request based on rate limits"""
