@@ -2,9 +2,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 import aiohttp
 import asyncio
-import json
 import logging
 import time
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +15,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Portfolio AI", description="Trading212 Portfolio with AI Analysis")
+
+# Load configuration
+def load_config():
+    try:
+        with open('/home/picxi/Desktop/projects/picxibox/212portfolio-ai/trading212_config.json', 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        raise
+
+config = load_config()
 
 # Initialize T212 API client
 t212_client = None
@@ -54,8 +65,10 @@ async def check_inference_service() -> bool:
     if _inference_cache is not None and (now - _inference_cache_ts) < _INFERENCE_CACHE_TTL:
         return _inference_cache
     try:
+        inference_config = config.get('inference_service', {})
+        base_url = inference_config.get('base_url', 'http://localhost:11434')
         async with aiohttp.ClientSession() as session:
-            async with session.get("http://192.168.1.211:11434/api/tags", timeout=5) as response:
+            async with session.get(f"{base_url}/api/tags", timeout=5) as response:
                 result = response.status == 200
     except Exception as e:
         logger.warning(f"Inference service not reachable: {e}")
@@ -133,17 +146,22 @@ portfolio facts:
 - biggest loser: {facts['biggest_loser']['ticker']} (£{facts['biggest_loser']['ppl_gbp']})
 """
 
+        inference_config = config.get('inference_service', {})
+        base_url = inference_config.get('base_url', 'http://localhost:11434')
+        model = inference_config.get('model', 'llama3.1:8b')
+        timeout = inference_config.get('timeout', 120)
+        
         payload = {
-            "model": "llama3.1:8b",
+            "model": model,
             "prompt": prompt,
             "stream": False
         }
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "http://192.168.1.211:11434/api/generate",
+                f"{base_url}/api/generate",
                 json=payload,
-                timeout=120
+                timeout=timeout
             ) as response:
                 if response.status == 200:
                     result = await response.json()

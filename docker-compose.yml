@@ -2,8 +2,6 @@ services:
   portfolio-ai:
     build: .
     container_name: portfolio-ai
-    extra_hosts:
-      - "inference.picxi.uk:192.168.1.211"
     ports:
       - "8765:8765"
     volumes:
