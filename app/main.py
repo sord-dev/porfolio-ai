@@ -19,7 +19,7 @@ app = FastAPI(title="Portfolio AI", description="Trading212 Portfolio with AI An
 # Load configuration
 def load_config():
     try:
-        with open('/home/picxi/Desktop/projects/picxibox/212portfolio-ai/trading212_config.json', 'r') as f:
+        with open('/app/trading212_config.json', 'r') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
